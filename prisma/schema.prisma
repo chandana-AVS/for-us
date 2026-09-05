@@ -1,0 +1,579 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum UserRole {
+  USER
+  MANAGER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BANNED
+  PENDING_VERIFICATION
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ALLOCATED
+  RESERVED
+  UNDER_MAINTENANCE
+  LOST
+  RETIRED
+  DISPOSED
+}
+
+enum AssetCondition {
+  NEW
+  GOOD
+  FAIR
+  POOR
+  DAMAGED
+}
+
+enum AllocationStatus {
+  ACTIVE
+  RETURNED
+  OVERDUE
+}
+
+enum AllocationTargetType {
+  EMPLOYEE
+  DEPARTMENT
+}
+
+enum TransferStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  RE_ALLOCATED
+}
+
+enum BookingStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+enum MaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum MaintenanceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  TECHNICIAN_ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum AuditCycleStatus {
+  DRAFT
+  IN_PROGRESS
+  CLOSED
+}
+
+enum AuditItemResult {
+  PENDING
+  VERIFIED
+  MISSING
+  DAMAGED
+}
+
+enum NotificationType {
+  ASSET_ASSIGNED
+  MAINTENANCE_APPROVED
+  MAINTENANCE_REJECTED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  TRANSFER_REQUESTED
+  TRANSFER_APPROVED
+  OVERDUE_ALERT
+  AUDIT_DISCREPANCY
+  SYSTEM_ALERT
+}
+
+// -----------------------------------------------------------------------------
+// AUTHENTICATION & USER MANAGEMENT (better-auth standard)
+// -----------------------------------------------------------------------------
+
+model User {
+  id               String       @id @default(cuid())
+  email            String       @unique
+  emailVerified    Boolean      @default(false)
+  name             String
+  image            String?
+  role             UserRole     @default(USER)
+  status           UserStatus   @default(ACTIVE)
+  phone            String?
+  isPhoneVerified  Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  hashId           Int          @unique @default(autoincrement())
+
+  // Relations
+  accounts             Account[]
+  sessions             Session[]
+  userProfile          UserProfile?
+  employee             Employee?
+  headedDepartments    Department[]           @relation("DepartmentHead")
+  raisedMaintenances   MaintenanceRequest[]   @relation("RaisedBy")
+  approvedMaintenances MaintenanceRequest[]   @relation("ApprovedBy")
+  assignedMaintenances MaintenanceRequest[]   @relation("AssignedTechnician")
+  requestedTransfers   TransferRequest[]      @relation("RequestedBy")
+  approvedTransfers    TransferRequest[]      @relation("ApprovedBy")
+  bookings             ResourceBooking[]
+  auditCyclesClosed    AuditCycle[]           @relation("ClosedBy")
+  verifiedAuditItems   AuditItem[]            @relation("VerifiedBy")
+  resolvedDiscrepancies DiscrepancyReport[]   @relation("ResolvedBy")
+  notifications        Notification[]
+  activityLogs         ActivityLog[]
+
+  @@index([email])
+  @@index([role])
+  @@index([hashId])
+  @@map("users")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  hashId                Int       @unique @default(autoincrement())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  hashId    Int      @unique @default(autoincrement())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  hashId     Int      @unique @default(autoincrement())
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+model RateLimit {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  count       Int      @default(0)
+  lastRequest BigInt?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  hashId      Int      @unique @default(autoincrement())
+
+  @@index([key])
+  @@map("rate_limits")
+}
+
+model UserProfile {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  fullName          String?
+  avatar            String?
+  bio               String?
+  departmentName    String?
+  jobTitle          String?
+  emergencyContact  String?
+  emergencyPhone    String?
+  emailAlerts       Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  hashId            Int      @unique @default(autoincrement())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+// -----------------------------------------------------------------------------
+// ORGANIZATION SETUP & STRUCTURE
+// -----------------------------------------------------------------------------
+
+model Department {
+  id                 String       @id @default(cuid())
+  name               String       @unique
+  description        String?
+  headUserId         String?
+  parentDepartmentId String?
+  isActive           Boolean      @default(true)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  hashId             Int          @unique @default(autoincrement())
+
+  headUser         User?             @relation("DepartmentHead", fields: [headUserId], references: [id])
+  parentDepartment Department?       @relation("DepartmentHierarchy", fields: [parentDepartmentId], references: [id])
+  subDepartments   Department[]       @relation("DepartmentHierarchy")
+  employees        Employee[]
+  assets           Asset[]
+  allocations      AssetAllocation[]
+  transferRequests TransferRequest[]  @relation("TransferToDepartment")
+  bookings         ResourceBooking[]
+  auditCycles      AuditCycle[]
+
+  @@map("departments")
+}
+
+model AssetCategory {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  description  String?
+  customFields Json?    // Array of { key, label, type, required }
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  hashId       Int      @unique @default(autoincrement())
+
+  assets Asset[]
+
+  @@map("asset_categories")
+}
+
+model Employee {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  name         String
+  email        String   @unique
+  departmentId String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  hashId       Int      @unique @default(autoincrement())
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department       Department?       @relation(fields: [departmentId], references: [id])
+  allocations      AssetAllocation[]
+  transferRequests TransferRequest[]  @relation("TransferToEmployee")
+
+  @@map("employees")
+}
+
+// -----------------------------------------------------------------------------
+// CORE DOMAIN: ASSET REGISTRATION & LIFECYCLE
+// -----------------------------------------------------------------------------
+
+model Asset {
+  id              String         @id @default(cuid())
+  assetTag        String         @unique // e.g., AST-0001
+  name            String
+  categoryId      String
+  serialNumber    String?        @unique
+  acquisitionDate DateTime?
+  acquisitionCost Float?
+  condition       AssetCondition @default(GOOD)
+  location        String?
+  departmentId    String?
+  isBookable      Boolean        @default(false)
+  status          AssetStatus    @default(AVAILABLE)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  hashId          Int            @unique @default(autoincrement())
+
+  category            AssetCategory        @relation(fields: [categoryId], references: [id])
+  department          Department?          @relation(fields: [departmentId], references: [id])
+  attachments         AssetAttachment[]
+  allocations         AssetAllocation[]
+  transferRequests    TransferRequest[]
+  bookings            ResourceBooking[]
+  maintenanceRequests MaintenanceRequest[]
+  auditItems          AuditItem[]
+
+  @@index([assetTag])
+  @@index([status])
+  @@index([categoryId])
+  @@index([departmentId])
+  @@map("assets")
+}
+
+model AssetAttachment {
+  id        String   @id @default(cuid())
+  assetId   String
+  fileUrl   String
+  fileName  String?
+  fileType  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  hashId    Int      @unique @default(autoincrement())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@map("asset_attachments")
+}
+
+// -----------------------------------------------------------------------------
+// WORKFLOW 1: ALLOCATIONS & TRANSFERS
+// -----------------------------------------------------------------------------
+
+model AssetAllocation {
+  id                  String               @id @default(cuid())
+  assetId             String
+  targetType          AllocationTargetType
+  employeeId          String?
+  departmentId        String?
+  allocatedDate       DateTime             @default(now())
+  expectedReturnDate  DateTime?
+  actualReturnDate    DateTime?
+  returnNotes         String?
+  status              AllocationStatus     @default(ACTIVE)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  hashId              Int                  @unique @default(autoincrement())
+
+  asset            Asset             @relation(fields: [assetId], references: [id])
+  employee         Employee?         @relation(fields: [employeeId], references: [id])
+  department       Department?       @relation(fields: [departmentId], references: [id])
+  transferRequests TransferRequest[] @relation("CurrentAllocation")
+
+  @@index([assetId])
+  @@index([employeeId])
+  @@index([status])
+  @@map("asset_allocations")
+}
+
+model TransferRequest {
+  id                      String         @id @default(cuid())
+  assetId                 String
+  currentAllocationId     String?
+  requestedByUserId       String
+  requestedToEmployeeId   String?
+  requestedToDepartmentId String?
+  status                  TransferStatus @default(REQUESTED)
+  approvedByUserId        String?
+  approvedAt              DateTime?
+  notes                   String?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  hashId                  Int            @unique @default(autoincrement())
+
+  asset                 Asset            @relation(fields: [assetId], references: [id])
+  currentAllocation     AssetAllocation? @relation("CurrentAllocation", fields: [currentAllocationId], references: [id])
+  requestedByUser       User             @relation("RequestedBy", fields: [requestedByUserId], references: [id])
+  requestedToEmployee   Employee?        @relation("TransferToEmployee", fields: [requestedToEmployeeId], references: [id])
+  requestedToDepartment Department?      @relation("TransferToDepartment", fields: [requestedToDepartmentId], references: [id])
+  approvedByUser        User?            @relation("ApprovedBy", fields: [approvedByUserId], references: [id])
+
+  @@index([assetId])
+  @@index([status])
+  @@map("transfer_requests")
+}
+
+// -----------------------------------------------------------------------------
+// WORKFLOW 2: RESOURCE BOOKINGS
+// -----------------------------------------------------------------------------
+
+model ResourceBooking {
+  id                    String        @id @default(cuid())
+  assetId               String
+  bookedByUserId        String
+  bookedForDepartmentId String?
+  startTime             DateTime
+  endTime               DateTime
+  status                BookingStatus @default(UPCOMING)
+  notes                 String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  hashId                Int           @unique @default(autoincrement())
+
+  asset               Asset       @relation(fields: [assetId], references: [id])
+  bookedByUser        User        @relation(fields: [bookedByUserId], references: [id])
+  bookedForDepartment Department? @relation(fields: [bookedForDepartmentId], references: [id])
+
+  @@index([assetId, startTime, endTime])
+  @@index([status])
+  @@map("resource_bookings")
+}
+
+// -----------------------------------------------------------------------------
+// WORKFLOW 3: MAINTENANCE MANAGEMENT
+// -----------------------------------------------------------------------------
+
+model MaintenanceRequest {
+  id                   String              @id @default(cuid())
+  assetId              String
+  raisedByUserId       String
+  issueDescription     String
+  priority             MaintenancePriority @default(MEDIUM)
+  photoUrl             String?
+  status               MaintenanceStatus   @default(PENDING)
+  approvedByUserId     String?
+  approvedAt           DateTime?
+  rejectionReason      String?
+  technicianUserId     String?
+  technicianAssignedAt DateTime?
+  resolvedAt           DateTime?
+  resolutionNotes      String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  hashId               Int                 @unique @default(autoincrement())
+
+  asset              Asset @relation(fields: [assetId], references: [id])
+  raisedByUser       User  @relation("RaisedBy", fields: [raisedByUserId], references: [id])
+  approvedByUser     User? @relation("ApprovedBy", fields: [approvedByUserId], references: [id])
+  assignedTechnician User? @relation("AssignedTechnician", fields: [technicianUserId], references: [id])
+
+  @@index([assetId])
+  @@index([status])
+  @@index([priority])
+  @@map("maintenance_requests")
+}
+
+// -----------------------------------------------------------------------------
+// AUDIT MANAGEMENT & DISCREPANCIES
+// -----------------------------------------------------------------------------
+
+model AuditCycle {
+  id                 String           @id @default(cuid())
+  name               String
+  scopeDepartmentId String?
+  scopeLocation      String?
+  startDate          DateTime
+  endDate            DateTime
+  status             AuditCycleStatus @default(DRAFT)
+  closedAt           DateTime?
+  closedByUserId     String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  hashId             Int              @unique @default(autoincrement())
+
+  scopeDepartment Department? @relation(fields: [scopeDepartmentId], references: [id])
+  closedByUser    User?       @relation("ClosedBy", fields: [closedByUserId], references: [id])
+  auditItems      AuditItem[]
+
+  @@map("audit_cycles")
+}
+
+model AuditItem {
+  id               String          @id @default(cuid())
+  auditCycleId     String
+  assetId          String
+  result           AuditItemResult @default(PENDING)
+  verifiedByUserId String?
+  verifiedAt       DateTime?
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  hashId           Int             @unique @default(autoincrement())
+
+  auditCycle AuditCycle          @relation(fields: [auditCycleId], references: [id], onDelete: Cascade)
+  asset      Asset               @relation(fields: [assetId], references: [id])
+  verifiedBy User?               @relation("VerifiedBy", fields: [verifiedByUserId], references: [id])
+  reports    DiscrepancyReport[]
+
+  @@index([auditCycleId])
+  @@index([assetId])
+  @@map("audit_items")
+}
+
+model DiscrepancyReport {
+  id               String    @id @default(cuid())
+  auditItemId      String
+  description      String
+  isResolved       Boolean   @default(false)
+  resolvedByUserId String?
+  resolvedAt       DateTime?
+  resolutionNotes  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  hashId           Int       @unique @default(autoincrement())
+
+  auditItem  AuditItem @relation(fields: [auditItemId], references: [id], onDelete: Cascade)
+  resolvedBy User?     @relation("ResolvedBy", fields: [resolvedByUserId], references: [id])
+
+  @@map("discrepancy_reports")
+}
+
+// -----------------------------------------------------------------------------
+// SYSTEM UTILITIES: AUDIT LOGS & NOTIFICATIONS
+// -----------------------------------------------------------------------------
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  oldData   Json?
+  newData   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  hashId    Int      @unique @default(autoincrement())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model Notification {
+  id                String           @id @default(cuid())
+  userId            String
+  type              NotificationType
+  title             String
+  message           String
+  isRead            Boolean          @default(false)
+  readAt            DateTime?
+  relatedEntityType String?
+  relatedEntityId   String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  hashId            Int              @unique @default(autoincrement())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
